@@ -275,4 +275,4 @@ jobs:
                   tauriScript: yarn tauri
                   args: ${{ format('{0} --config src-tauri/tauri.release.conf.json', matrix.args) }}
                   retryAttempts: 2
-                  includeUpdaterJson: true
+                  uploadUpdaterJson: false
