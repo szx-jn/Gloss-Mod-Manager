@@ -1,0 +1,202 @@
+name: macOS CrossOver build
+
+on:
+    push:
+        branches:
+            - v2
+            - "fix/**"
+        paths-ignore:
+            - "ci-debug/**"
+    pull_request:
+        branches:
+            - v2
+        paths-ignore:
+            - "ci-debug/**"
+    workflow_dispatch:
+
+permissions:
+    contents: write
+    issues: write
+    pull-requests: write
+
+concurrency:
+    group: macos-crossover-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    build:
+        name: macOS arm64 CrossOver build
+        runs-on: macos-14
+        timeout-minutes: 120
+        env:
+            NODE_OPTIONS: --max-old-space-size=8192
+            GMM_TARGET_TRIPLE: aarch64-apple-darwin
+            HOMEBREW_NO_AUTO_UPDATE: 1
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v6
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v6
+              with:
+                  node-version: lts/*
+                  cache: yarn
+                  cache-dependency-path: yarn.lock
+
+            - name: Install Rust stable
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: aarch64-apple-darwin
+
+            - name: Restore Rust cache
+              uses: swatinem/rust-cache@v2
+              with:
+                  workspaces: ./src-tauri -> target
+                  cache-on-failure: true
+
+            - name: Install sidecar build dependencies
+              shell: bash
+              run: |
+                  formulae=(
+                    autoconf
+                    automake
+                    libtool
+                    pkg-config
+                  )
+                  missing_formulae=()
+
+                  for formula in "${formulae[@]}"; do
+                      if ! brew list --versions "$formula" >/dev/null; then
+                          missing_formulae+=("$formula")
+                      fi
+                  done
+
+                  if [[ ${#missing_formulae[@]} -gt 0 ]]; then
+                      brew install "${missing_formulae[@]}"
+                  fi
+
+            - name: Install frontend dependencies without lifecycle scripts
+              env:
+                  npm_config_ignore_scripts: "true"
+              run: yarn install --frozen-lockfile --ignore-scripts
+
+            - name: Prepare native macOS sidecars
+              env:
+                  GMM_TARGET_TRIPLE: aarch64-apple-darwin
+              run: yarn prepare:sidecars
+
+            - name: Validate frontend build
+              shell: bash
+              run: |
+                  set -o pipefail
+                  yarn build 2>&1 | tee "$RUNNER_TEMP/frontend-build.log"
+
+            - name: Upload frontend build log
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: frontend-build-log
+                  path: "$RUNNER_TEMP/frontend-build.log"
+                  if-no-files-found: warn
+                  retention-days: 7
+
+            - name: Comment frontend build diagnostics
+              if: failure() && github.event_name == 'pull_request'
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  PR_NUMBER: ${{ github.event.pull_request.number }}
+              shell: bash
+              run: |
+                  if [[ -f "$RUNNER_TEMP/frontend-build.log" ]]; then
+                      tail -n 250 "$RUNNER_TEMP/frontend-build.log" > "$RUNNER_TEMP/frontend-tail.log"
+                  else
+                      printf '%s\n' "frontend-build.log was not generated" > "$RUNNER_TEMP/frontend-tail.log"
+                  fi
+
+                  gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/frontend-tail.log"
+
+            - name: Persist frontend build diagnostics
+              if: failure() && github.event_name == 'push'
+              shell: bash
+              run: |
+                  mkdir -p ci-debug
+                  if [[ -f "$RUNNER_TEMP/frontend-build.log" ]]; then
+                      cp "$RUNNER_TEMP/frontend-build.log" ci-debug/frontend-build.log
+                  else
+                      printf '%s\n' "frontend-build.log was not generated" > ci-debug/frontend-build.log
+                  fi
+
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git add ci-debug/frontend-build.log
+                  git commit -m "ci-debug: persist frontend build failure"
+                  git push origin "HEAD:${GITHUB_REF_NAME}"
+
+            - name: Build native macOS app and DMG
+              env:
+                  GMM_TARGET_TRIPLE: aarch64-apple-darwin
+              shell: bash
+              run: |
+                  set -o pipefail
+                  yarn tauri build --verbose --no-sign --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.conf.json 2>&1 | tee "$RUNNER_TEMP/tauri-build.log"
+
+            - name: Upload Tauri build log on failure
+              if: failure()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: tauri-build-log
+                  path: "$RUNNER_TEMP/tauri-build.log"
+                  if-no-files-found: warn
+                  retention-days: 7
+
+            - name: Verify bundle permissions and embedded sidecars
+              shell: bash
+              run: |
+                  APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gloss Mod Manager.app"
+
+                  test -d "$APP"
+                  SEVENZIP="$(find "$APP/Contents/MacOS" -maxdepth 1 -type f -name 'sevenzip*' -print -quit)"
+                  ARIA2="$(find "$APP/Contents/MacOS" -maxdepth 1 -type f -name 'aria2c*' -print -quit)"
+
+                  test -n "$SEVENZIP"
+                  test -n "$ARIA2"
+                  test -x "$SEVENZIP"
+                  test -x "$ARIA2"
+
+                  echo "===== bundled executables ====="
+                  file "$SEVENZIP"
+                  file "$ARIA2"
+
+                  echo "===== 7-Zip smoke test ====="
+                  "$SEVENZIP" --help >/dev/null
+
+                  echo "===== aria2 smoke test ====="
+                  "$ARIA2" --version >/dev/null
+
+                  echo "===== ad-hoc code signing ====="
+                  codesign --force --deep --sign - "$APP"
+                  codesign --verify --deep --strict --verbose=2 "$APP"
+
+                  echo "===== codesign entitlements ====="
+                  codesign -d --entitlements :- "$APP" 2>&1 | tee "$RUNNER_TEMP/gmm-entitlements.txt"
+
+                  if grep -q "com.apple.security.app-sandbox" "$RUNNER_TEMP/gmm-entitlements.txt"; then
+                      echo "::error::App Sandbox entitlement is still present."
+                      exit 1
+                  fi
+
+                  echo "===== final app architecture ====="
+                  file "$APP/Contents/MacOS/Gloss Mod Manager"
+
+                  echo "CrossOver macOS permission verification: PASS"
+
+            - name: Upload macOS application artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: gloss-mod-manager-macos-arm64-crossover
+                  path: |
+                      src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gloss Mod Manager.app
+                      src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+                  if-no-files-found: error
+                  retention-days: 14

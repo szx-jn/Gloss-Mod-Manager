@@ -1,7 +1,13 @@
 {
     "identifier": "desktop-capability",
-    "platforms": ["macOS", "windows", "linux"],
-    "windows": ["main"],
+    "platforms": [
+        "macOS",
+        "windows",
+        "linux"
+    ],
+    "windows": [
+        "main"
+    ],
     "permissions": [
         "core:event:default",
         "autostart:default",
@@ -28,7 +34,10 @@
             "identifier": "fs:scope",
             "allow": [
                 {
-                    "path": "**"
+                    "path": "$HOME/**"
+                },
+                {
+                    "path": "$TEMP/**"
                 }
             ]
         },
