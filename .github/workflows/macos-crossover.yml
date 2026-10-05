@@ -99,6 +99,21 @@ jobs:
                   if-no-files-found: warn
                   retention-days: 7
 
+            - name: Comment frontend build diagnostics
+              if: failure() && github.event_name == 'pull_request'
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  PR_NUMBER: ${{ github.event.pull_request.number }}
+              shell: bash
+              run: |
+                  if [[ -f "$RUNNER_TEMP/frontend-build.log" ]]; then
+                      tail -n 250 "$RUNNER_TEMP/frontend-build.log" > "$RUNNER_TEMP/frontend-tail.log"
+                  else
+                      printf '%s\n' "frontend-build.log was not generated" > "$RUNNER_TEMP/frontend-tail.log"
+                  fi
+
+                  gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/frontend-tail.log"
+
             - name: Persist frontend build diagnostics
               if: failure() && github.event_name == 'push'
               shell: bash
