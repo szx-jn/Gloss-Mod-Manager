@@ -89,7 +89,7 @@ jobs:
               shell: bash
               run: |
                   set -o pipefail
-                  yarn tauri build --verbose --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.conf.json 2>&1 | tee "$RUNNER_TEMP/tauri-build.log"
+                  yarn tauri build --verbose --no-sign --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.conf.json 2>&1 | tee "$RUNNER_TEMP/tauri-build.log"
 
             - name: Upload Tauri build log on failure
               if: failure()
@@ -124,6 +124,10 @@ jobs:
                   echo "===== aria2 smoke test ====="
                   "$ARIA2" --version >/dev/null
 
+                  echo "===== ad-hoc code signing ====="
+                  codesign --force --deep --sign - "$APP"
+                  codesign --verify --deep --strict --verbose=2 "$APP"
+
                   echo "===== codesign entitlements ====="
                   codesign -d --entitlements :- "$APP" 2>&1 | tee "$RUNNER_TEMP/gmm-entitlements.txt"
 
@@ -131,6 +135,9 @@ jobs:
                       echo "::error::App Sandbox entitlement is still present."
                       exit 1
                   fi
+
+                  echo "===== final app architecture ====="
+                  file "$APP/Contents/MacOS/Gloss Mod Manager"
 
                   echo "CrossOver macOS permission verification: PASS"
 
