@@ -70,10 +70,19 @@ jobs:
                       brew install "${missing_formulae[@]}"
                   fi
 
-            - name: Install frontend dependencies
-              run: yarn install --frozen-lockfile
+            - name: Install frontend dependencies without lifecycle scripts
+              env:
+                  npm_config_ignore_scripts: "true"
+              run: yarn install --frozen-lockfile --ignore-scripts
+
+            - name: Prepare native macOS sidecars
+              env:
+                  GMM_TARGET_TRIPLE: aarch64-apple-darwin
+              run: yarn prepare:sidecars
 
             - name: Build native macOS app and DMG
+              env:
+                  GMM_TARGET_TRIPLE: aarch64-apple-darwin
               run: yarn tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.conf.json
 
             - name: Verify bundle permissions and embedded sidecars
@@ -82,18 +91,23 @@ jobs:
                   APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gloss Mod Manager.app"
 
                   test -d "$APP"
-                  test -x "$APP/Contents/MacOS/sevenzip"
-                  test -x "$APP/Contents/MacOS/aria2c"
+                  SEVENZIP="$(find "$APP/Contents/MacOS" -maxdepth 1 -type f -name 'sevenzip*' -print -quit)"
+                  ARIA2="$(find "$APP/Contents/MacOS" -maxdepth 1 -type f -name 'aria2c*' -print -quit)"
+
+                  test -n "$SEVENZIP"
+                  test -n "$ARIA2"
+                  test -x "$SEVENZIP"
+                  test -x "$ARIA2"
 
                   echo "===== bundled executables ====="
-                  file "$APP/Contents/MacOS/sevenzip"
-                  file "$APP/Contents/MacOS/aria2c"
+                  file "$SEVENZIP"
+                  file "$ARIA2"
 
                   echo "===== 7-Zip smoke test ====="
-                  "$APP/Contents/MacOS/sevenzip" --help >/dev/null
+                  "$SEVENZIP" --help >/dev/null
 
                   echo "===== aria2 smoke test ====="
-                  "$APP/Contents/MacOS/aria2c" --version >/dev/null
+                  "$ARIA2" --version >/dev/null
 
                   echo "===== codesign entitlements ====="
                   codesign -d --entitlements :- "$APP" 2>&1 | tee "$RUNNER_TEMP/gmm-entitlements.txt"
