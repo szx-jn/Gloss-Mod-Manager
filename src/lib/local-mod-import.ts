@@ -421,7 +421,7 @@ function getArchiveImportErrorMessage(error: unknown) {
     if (
         detail.includes("cannot open the file as archive") ||
         detail.includes("can not open the file as archive")
-    )
+    ) {
         return "下载文件不是有效压缩包，可能下载源返回了网页/错误内容，或文件已损坏。请删除该下载任务和文件后重新下载；如果仍失败，请在浏览器手动下载正确压缩包后导入。";
     }
 
