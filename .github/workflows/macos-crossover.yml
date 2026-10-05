@@ -80,10 +80,25 @@ jobs:
                   GMM_TARGET_TRIPLE: aarch64-apple-darwin
               run: yarn prepare:sidecars
 
+            - name: Validate frontend build
+              run: yarn build
+
             - name: Build native macOS app and DMG
               env:
                   GMM_TARGET_TRIPLE: aarch64-apple-darwin
-              run: yarn tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.conf.json
+              shell: bash
+              run: |
+                  set -o pipefail
+                  yarn tauri build --verbose --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.conf.json 2>&1 | tee "$RUNNER_TEMP/tauri-build.log"
+
+            - name: Upload Tauri build log on failure
+              if: failure()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: tauri-build-log
+                  path: "$RUNNER_TEMP/tauri-build.log"
+                  if-no-files-found: warn
+                  retention-days: 7
 
             - name: Verify bundle permissions and embedded sidecars
               shell: bash
