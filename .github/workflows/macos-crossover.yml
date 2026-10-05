@@ -5,13 +5,17 @@ on:
         branches:
             - v2
             - "fix/**"
+        paths-ignore:
+            - "ci-debug/**"
     pull_request:
         branches:
             - v2
+        paths-ignore:
+            - "ci-debug/**"
     workflow_dispatch:
 
 permissions:
-    contents: read
+    contents: write
 
 concurrency:
     group: macos-crossover-${{ github.workflow }}-${{ github.ref }}
@@ -94,6 +98,23 @@ jobs:
                   path: "$RUNNER_TEMP/frontend-build.log"
                   if-no-files-found: warn
                   retention-days: 7
+
+            - name: Persist frontend build diagnostics
+              if: failure() && github.event_name == 'push'
+              shell: bash
+              run: |
+                  mkdir -p ci-debug
+                  if [[ -f "$RUNNER_TEMP/frontend-build.log" ]]; then
+                      cp "$RUNNER_TEMP/frontend-build.log" ci-debug/frontend-build.log
+                  else
+                      printf '%s\n' "frontend-build.log was not generated" > ci-debug/frontend-build.log
+                  fi
+
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git add ci-debug/frontend-build.log
+                  git commit -m "ci-debug: persist frontend build failure"
+                  git push origin "HEAD:${GITHUB_REF_NAME}"
 
             - name: Build native macOS app and DMG
               env:
