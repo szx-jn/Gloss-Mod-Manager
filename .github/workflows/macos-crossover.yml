@@ -1,0 +1,116 @@
+name: macOS CrossOver build
+
+on:
+    push:
+        branches:
+            - v2
+            - "fix/**"
+    pull_request:
+        branches:
+            - v2
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: macos-crossover-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    build:
+        name: macOS arm64 CrossOver build
+        runs-on: macos-14
+        timeout-minutes: 120
+        env:
+            NODE_OPTIONS: --max-old-space-size=8192
+            GMM_TARGET_TRIPLE: aarch64-apple-darwin
+            HOMEBREW_NO_AUTO_UPDATE: 1
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v6
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v6
+              with:
+                  node-version: lts/*
+                  cache: yarn
+                  cache-dependency-path: yarn.lock
+
+            - name: Install Rust stable
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: aarch64-apple-darwin
+
+            - name: Restore Rust cache
+              uses: swatinem/rust-cache@v2
+              with:
+                  workspaces: ./src-tauri -> target
+                  cache-on-failure: true
+
+            - name: Install sidecar build dependencies
+              shell: bash
+              run: |
+                  formulae=(
+                    autoconf
+                    automake
+                    libtool
+                    pkg-config
+                  )
+                  missing_formulae=()
+
+                  for formula in "${formulae[@]}"; do
+                      if ! brew list --versions "$formula" >/dev/null; then
+                          missing_formulae+=("$formula")
+                      fi
+                  done
+
+                  if [[ ${#missing_formulae[@]} -gt 0 ]]; then
+                      brew install "${missing_formulae[@]}"
+                  fi
+
+            - name: Install frontend dependencies
+              run: yarn install --frozen-lockfile
+
+            - name: Build native macOS app and DMG
+              run: yarn tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.conf.json
+
+            - name: Verify bundle permissions and embedded sidecars
+              shell: bash
+              run: |
+                  APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gloss Mod Manager.app"
+
+                  test -d "$APP"
+                  test -x "$APP/Contents/MacOS/sevenzip"
+                  test -x "$APP/Contents/MacOS/aria2c"
+
+                  echo "===== bundled executables ====="
+                  file "$APP/Contents/MacOS/sevenzip"
+                  file "$APP/Contents/MacOS/aria2c"
+
+                  echo "===== 7-Zip smoke test ====="
+                  "$APP/Contents/MacOS/sevenzip" --help >/dev/null
+
+                  echo "===== aria2 smoke test ====="
+                  "$APP/Contents/MacOS/aria2c" --version >/dev/null
+
+                  echo "===== codesign entitlements ====="
+                  codesign -d --entitlements :- "$APP" 2>&1 | tee "$RUNNER_TEMP/gmm-entitlements.txt"
+
+                  if grep -q "com.apple.security.app-sandbox" "$RUNNER_TEMP/gmm-entitlements.txt"; then
+                      echo "::error::App Sandbox entitlement is still present."
+                      exit 1
+                  fi
+
+                  echo "CrossOver macOS permission verification: PASS"
+
+            - name: Upload macOS application artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: gloss-mod-manager-macos-arm64-crossover
+                  path: |
+                      src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gloss Mod Manager.app
+                      src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+                  if-no-files-found: error
+                  retention-days: 14
