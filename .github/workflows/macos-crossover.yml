@@ -16,6 +16,8 @@ on:
 
 permissions:
     contents: write
+    issues: write
+    pull-requests: write
 
 concurrency:
     group: macos-crossover-${{ github.workflow }}-${{ github.ref }}
