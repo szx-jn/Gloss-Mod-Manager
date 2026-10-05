@@ -410,9 +410,18 @@ function getArchiveImportErrorMessage(error: unknown) {
     const detail = getSevenZipErrorText(error);
 
     if (
+        detail.includes("operation not permitted") ||
+        detail.includes("permission denied") ||
+        detail.includes("access denied") ||
+        detail.includes("forbidden path")
+    ) {
+        return "macOS 拒绝了文件访问。请确认当前 Gloss Mod Manager 为未启用 App Sandbox 的版本，并在“系统设置 → 隐私与安全性 → 完全磁盘访问”中重新允许本应用；CrossOver 默认容器位于 ~/Library/Application Support/CrossOver/Bottles。";
+    }
+
+    if (
         detail.includes("cannot open the file as archive") ||
         detail.includes("can not open the file as archive")
-    ) {
+    )
         return "下载文件不是有效压缩包，可能下载源返回了网页/错误内容，或文件已损坏。请删除该下载任务和文件后重新下载；如果仍失败，请在浏览器手动下载正确压缩包后导入。";
     }
 
